@@ -246,21 +246,52 @@ jobs:
                 return;
               }
 
+              // For "已实现", only promote parent when all sub-issues are already in "已实现".
+              if (targetStatus === "已实现") {
+                const subIssuesResp = await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues", {
+                  owner,
+                  repo,
+                  issue_number: parentIssue.number,
+                  headers: { "X-GitHub-Api-Version": "2022-11-28" },
+                });
+                const subIssues = subIssuesResp.data || [];
+                if (!subIssues.length) {
+                  core.info(`Parent #${parentIssue.number} has no sub-issues, skip parent implemented promotion.`);
+                  return;
+                }
+
+                for (const sub of subIssues) {
+                  const subIssueResp = await github.graphql(issueQuery, {
+                    owner,
+                    repo,
+                    issueNumber: sub.number,
+                  });
+                  const subIssue = subIssueResp.repository?.issue;
+                  if (!subIssue) {
+                    core.info(`Sub-issue #${sub.number} cannot be loaded, skip parent implemented promotion.`);
+                    return;
+                  }
+                  const subItem = (subIssue.projectItems.nodes || []).find((n) => n?.project?.id === project.id);
+                  if (!subItem) {
+                    core.info(`Sub-issue #${sub.number} is not in project #${projectNumber}, skip parent implemented promotion.`);
+                    return;
+                  }
+                  const subStatusValue = (subItem.fieldValues.nodes || []).find(
+                    (v) => v?.field?.id === statusField.id
+                  );
+                  const subStatusName = subStatusValue?.name || "(empty)";
+                  if (subStatusName !== "已实现") {
+                    core.info(`Sub-issue #${sub.number} status is '${subStatusName}', not '已实现'. Parent will not move to '已实现'.`);
+                    return;
+                  }
+                }
+              }
+
               await setIssueProjectStatus(
                 parentIssue.number,
                 targetStatus,
                 `${sourceLabel}; sync from child #${childIssueNumber}`
               );
-
-              if (targetStatus === "已实现") {
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: parentIssue.number,
-                  state: "closed",
-                });
-                core.info(`Closed parent issue #${parentIssue.number} because child #${childIssueNumber} reached '${targetStatus}'.`);
-              }
             }
 
             if (context.eventName === "push") {

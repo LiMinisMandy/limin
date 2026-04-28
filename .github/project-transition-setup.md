@@ -61,9 +61,8 @@ When a sub-issue (bug) status changes by commit command:
   - `研发完成`
   - `需求验收完成`
   - `测试中`
-  - `已实现`
   - `已拒绝`
-- if child reaches `已实现`, parent issue is auto-closed immediately.
+- for `已实现`: only when **all** sub-issues are already in `已实现`, parent status moves to `已实现`.
 
 When a bug issue is closed and it is a sub-issue of a requirement issue:
 
