@@ -4,13 +4,10 @@
 
 Go to `Settings -> Secrets and variables -> Actions -> Variables`:
 
-- `PROJECT_NUMBER`: GitHub Project v2 number, e.g. `3`
+- `PROJECT_NUMBER`: GitHub Project v2 number, e.g. `1` (optional; default is `1`)
 - `PROJECT_OWNER`: project owner login, e.g. `my-org` (optional; default is repo owner)
-- `PROJECT_TITLE`: project title for disambiguation when an issue belongs to multiple projects (optional)
 - `STATUS_FIELD_NAME`: status field name in project, default is `Status` (optional)
 - `COMMENT_ON_TRANSITION`: `true` or `false` (optional, default `false`)
-
-`PROJECT_NUMBER` is now optional. If not provided, workflow will auto-pick the project from the issue's existing project items when there is exactly one match.
 
 ## 2) Add Secret
 
