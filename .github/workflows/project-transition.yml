@@ -62,48 +62,56 @@ jobs:
 
             core.info(`Found ${actions.length} transition command(s).`);
 
-            const projectQuery = `
-              query($owner: String!, $number: Int!) {
-                organization(login: $owner) {
-                  projectV2(number: $number) {
-                    id
-                    title
-                    number
-                    fields(first: 100) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
+            const ownerResp = await github.rest.users.getByUsername({ username: owner });
+            const ownerType = ownerResp.data?.type;
+            const projectQuery =
+              ownerType === "Organization"
+                ? `
+                    query($owner: String!, $number: Int!) {
+                      organization(login: $owner) {
+                        projectV2(number: $number) {
                           id
-                          name
-                          options {
-                            id
-                            name
+                          title
+                          number
+                          fields(first: 100) {
+                            nodes {
+                              ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                                options {
+                                  id
+                                  name
+                                }
+                              }
+                            }
                           }
                         }
                       }
                     }
-                  }
-                }
-                user(login: $owner) {
-                  projectV2(number: $number) {
-                    id
-                    title
-                    number
-                    fields(first: 100) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
+                  `
+                : `
+                    query($owner: String!, $number: Int!) {
+                      user(login: $owner) {
+                        projectV2(number: $number) {
                           id
-                          name
-                          options {
-                            id
-                            name
+                          title
+                          number
+                          fields(first: 100) {
+                            nodes {
+                              ... on ProjectV2SingleSelectField {
+                                id
+                                name
+                                options {
+                                  id
+                                  name
+                                }
+                              }
+                            }
                           }
                         }
                       }
                     }
-                  }
-                }
-              }
-            `;
+                  `;
 
             const projectResp = await github.graphql(projectQuery, {
               owner,
