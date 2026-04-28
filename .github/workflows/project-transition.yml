@@ -20,6 +20,7 @@ jobs:
       - name: Parse commit commands and update project status
         uses: actions/github-script@v7
         env:
+          HAS_PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN != '' }}
           PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
           STATUS_FIELD_NAME: ${{ vars.STATUS_FIELD_NAME }}
@@ -32,6 +33,10 @@ jobs:
             const projectNumber = Number(process.env.PROJECT_NUMBER || "1");
             const statusFieldName = process.env.STATUS_FIELD_NAME || "Status";
             const commentOnTransition = (process.env.COMMENT_ON_TRANSITION || "false").toLowerCase() === "true";
+            if (process.env.HAS_PROJECT_TOKEN !== "true") {
+              core.setFailed("PROJECT_TOKEN secret is required for updating user-owned Project v2 items.");
+              return;
+            }
             const transitions = { plan: "策划完成" };
             const commandRegex = /\b(plan)\s+#(\d+)\b/ig;
 
@@ -212,7 +217,7 @@ jobs:
 
               const item = (issue.projectItems.nodes || []).find((n) => n?.project?.id === project.id);
               if (!item) {
-                core.warning(`Issue #${issue.number} is not in project #${projectNumber}, skipped.`);
+                core.warning(`Issue #${issue.number} is not visible in project #${projectNumber} for current token, skipped.`);
                 continue;
               }
 
