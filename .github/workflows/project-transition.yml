@@ -37,8 +37,15 @@ jobs:
               core.setFailed("PROJECT_TOKEN secret is required for updating user-owned Project v2 items.");
               return;
             }
-            const transitions = { plan: "策划完成" };
-            const commandRegex = /\b(plan)\s+#(\d+)\b/ig;
+            const transitions = {
+              plan: "策划完成",
+              rd_done: "研发完成",
+              req_accept_done: "需求验收完成",
+              testing: "测试中",
+              implemented: "已实现",
+              rejected: "已拒绝"
+            };
+            const commandRegex = /\b(plan|rd_done|req_accept_done|testing|implemented|rejected)\s+#(\d+)\b/ig;
 
             const commits = context.payload.commits || [];
             if (!commits.length) {

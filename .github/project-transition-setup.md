@@ -35,10 +35,20 @@ It triggers on:
 Supported commands:
 
 - `plan #16`
+- `rd_done #16`
+- `req_accept_done #16`
+- `testing #16`
+- `implemented #16`
+- `rejected #16`
 
 Current built-in transition in workflow:
 
 - `plan -> 策划完成`
+- `rd_done -> 研发完成`
+- `req_accept_done -> 需求验收完成`
+- `testing -> 测试中`
+- `implemented -> 已实现`
+- `rejected -> 已拒绝`
 
 One commit can include multiple commands, e.g.:
 
