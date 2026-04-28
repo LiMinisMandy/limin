@@ -54,6 +54,17 @@ Current built-in transition in workflow:
 
 ## 5) Parent Requirement Auto-Close (Sub-issues)
 
+When a sub-issue (bug) status changes by commit command:
+
+- parent issue project status follows child status for:
+  - `策划完成`
+  - `研发完成`
+  - `需求验收完成`
+  - `测试中`
+  - `已实现`
+  - `已拒绝`
+- if child reaches `已实现`, parent issue is auto-closed immediately.
+
 When a bug issue is closed and it is a sub-issue of a requirement issue:
 
 - if parent still has open sub-issues: do nothing
