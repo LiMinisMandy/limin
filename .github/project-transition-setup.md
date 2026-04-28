@@ -26,8 +26,10 @@ Workflow file: `.github/workflows/project-transition.yml`
 
 It triggers on:
 
+- push to `master`
 - push to `main`
 - push to `develop`
+- issue closed (`issues.closed`)
 - manual run (`workflow_dispatch`)
 
 ## 4) Commit Message Format
@@ -50,6 +52,24 @@ Current built-in transition in workflow:
 - `implemented -> 已实现`
 - `rejected -> 已拒绝`
 
+## 5) Parent Requirement Auto-Close (Sub-issues)
+
+When a bug issue is closed and it is a sub-issue of a requirement issue:
+
+- if parent still has open sub-issues: do nothing
+- if all sub-issues are closed:
+  - parent issue will be auto-closed
+  - parent project status will be updated to `已实现`
+
 One commit can include multiple commands, e.g.:
 
 `start #12 fix #11`
+
+## 6) Test Steps
+
+1. Create one requirement issue (parent), e.g. `#100`.
+2. Create two bug issues, e.g. `#101` and `#102`.
+3. In issue `#100`, add `#101` and `#102` as sub-issues.
+4. Ensure issue `#100` is added into your GitHub Project v2.
+5. Close `#101`: parent should remain open.
+6. Close `#102`: parent `#100` should auto-close and project status should become `已实现`.

@@ -6,6 +6,9 @@ on:
       - master
       - main
       - develop
+  issues:
+    types:
+      - closed
   workflow_dispatch:
 
 permissions:
@@ -37,7 +40,7 @@ jobs:
               core.setFailed("PROJECT_TOKEN secret is required for updating user-owned Project v2 items.");
               return;
             }
-            const transitions = {
+            const commitTransitions = {
               plan: "策划完成",
               rd_done: "研发完成",
               req_accept_done: "需求验收完成",
@@ -46,33 +49,6 @@ jobs:
               rejected: "已拒绝"
             };
             const commandRegex = /\b(plan|rd_done|req_accept_done|testing|implemented|rejected)\s+#(\d+)\b/ig;
-
-            const commits = context.payload.commits || [];
-            if (!commits.length) {
-              core.info("No commits found in payload, nothing to do.");
-              return;
-            }
-
-            const actions = [];
-            for (const commit of commits) {
-              const message = commit.message || "";
-              let match;
-              while ((match = commandRegex.exec(message)) !== null) {
-                actions.push({
-                  issueNumber: Number(match[2]),
-                  command: String(match[1]).toLowerCase(),
-                  sha: commit.id,
-                });
-              }
-              commandRegex.lastIndex = 0;
-            }
-
-            if (!actions.length) {
-              core.info("No transition commands found in commit messages.");
-              return;
-            }
-
-            core.info(`Found ${actions.length} transition command(s).`);
 
             const ownerResp = await github.rest.users.getByUsername({ username: owner });
             const ownerType = ownerResp.data?.type;
@@ -197,35 +173,31 @@ jobs:
               }
             `;
 
-            for (const action of actions) {
-              const targetStatus = transitions[action.command];
-              if (!targetStatus) {
-                core.warning(`No transition mapping for command '${action.command}', skipped #${action.issueNumber}`);
-                continue;
-              }
+            async function setIssueProjectStatus(issueNumber, targetStatus, sourceLabel) {
+              if (!targetStatus) return false;
 
               const targetOptionId = optionByName.get(targetStatus);
               if (!targetOptionId) {
-                core.warning(`Status option '${targetStatus}' not found in project field '${statusFieldName}', skipped #${action.issueNumber}`);
-                continue;
+                core.warning(`Status option '${targetStatus}' not found in project field '${statusFieldName}', skipped #${issueNumber}`);
+                return false;
               }
 
               const issueResp = await github.graphql(issueQuery, {
                 owner,
                 repo,
-                issueNumber: action.issueNumber,
+                issueNumber,
               });
 
               const issue = issueResp.repository?.issue;
               if (!issue) {
-                core.warning(`Issue #${action.issueNumber} not found in ${owner}/${repo}.`);
-                continue;
+                core.warning(`Issue #${issueNumber} not found in ${owner}/${repo}.`);
+                return false;
               }
 
               const item = (issue.projectItems.nodes || []).find((n) => n?.project?.id === project.id);
               if (!item) {
                 core.warning(`Issue #${issue.number} is not visible in project #${projectNumber} for current token, skipped.`);
-                continue;
+                return false;
               }
 
               const currentStatusValue = (item.fieldValues.nodes || []).find(
@@ -234,7 +206,7 @@ jobs:
               const currentStatusName = currentStatusValue?.name || "(empty)";
               if (currentStatusValue?.optionId === targetOptionId) {
                 core.info(`#${issue.number} already '${targetStatus}', skipped.`);
-                continue;
+                return true;
               }
 
               await github.graphql(updateMutation, {
@@ -245,7 +217,7 @@ jobs:
               });
 
               core.info(
-                `Updated #${issue.number}: '${currentStatusName}' -> '${targetStatus}' (command: ${action.command}, commit: ${action.sha.slice(0, 7)})`
+                `Updated #${issue.number}: '${currentStatusName}' -> '${targetStatus}' (${sourceLabel})`
               );
 
               if (commentOnTransition) {
@@ -253,7 +225,102 @@ jobs:
                   owner,
                   repo,
                   issue_number: issue.number,
-                  body: `Auto transition by commit \`${action.sha.slice(0, 7)}\`: \`${action.command} #${issue.number}\` -> **${targetStatus}**`,
+                  body: `Auto transition (${sourceLabel}) -> **${targetStatus}**`,
                 });
               }
+              return true;
             }
+
+            if (context.eventName === "push") {
+              const commits = context.payload.commits || [];
+              if (!commits.length) {
+                core.info("No commits found in payload, nothing to do.");
+                return;
+              }
+
+              const actions = [];
+              for (const commit of commits) {
+                const message = commit.message || "";
+                let match;
+                while ((match = commandRegex.exec(message)) !== null) {
+                  actions.push({
+                    issueNumber: Number(match[2]),
+                    command: String(match[1]).toLowerCase(),
+                    sha: commit.id,
+                  });
+                }
+                commandRegex.lastIndex = 0;
+              }
+
+              if (!actions.length) {
+                core.info("No transition commands found in commit messages.");
+                return;
+              }
+
+              core.info(`Found ${actions.length} transition command(s).`);
+              for (const action of actions) {
+                const targetStatus = commitTransitions[action.command];
+                if (!targetStatus) {
+                  core.warning(`No transition mapping for command '${action.command}', skipped #${action.issueNumber}`);
+                  continue;
+                }
+                await setIssueProjectStatus(
+                  action.issueNumber,
+                  targetStatus,
+                  `command: ${action.command}, commit: ${action.sha.slice(0, 7)}`
+                );
+              }
+              return;
+            }
+
+            if (context.eventName === "issues" && context.payload.action === "closed") {
+              const childIssueNumber = context.payload.issue?.number;
+              if (!childIssueNumber) {
+                core.info("No issue number in payload, skip.");
+                return;
+              }
+
+              let parentIssue;
+              try {
+                const parentResp = await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}/parent", {
+                  owner,
+                  repo,
+                  issue_number: childIssueNumber,
+                  headers: { "X-GitHub-Api-Version": "2022-11-28" },
+                });
+                parentIssue = parentResp.data;
+              } catch (e) {
+                core.info(`Issue #${childIssueNumber} has no parent issue, skip parent auto-close.`);
+                return;
+              }
+
+              const subIssuesResp = await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues", {
+                owner,
+                repo,
+                issue_number: parentIssue.number,
+                headers: { "X-GitHub-Api-Version": "2022-11-28" },
+              });
+              const subIssues = subIssuesResp.data || [];
+              const hasOpenSubIssue = subIssues.some((i) => i.state !== "closed");
+              if (hasOpenSubIssue) {
+                core.info(`Parent #${parentIssue.number} still has open sub-issues, skip.`);
+                return;
+              }
+
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: parentIssue.number,
+                state: "closed",
+              });
+              core.info(`Closed parent issue #${parentIssue.number} because all sub-issues are closed.`);
+
+              await setIssueProjectStatus(
+                parentIssue.number,
+                "已实现",
+                `all sub-issues closed (trigger child #${childIssueNumber})`
+              );
+              return;
+            }
+
+            core.info(`Event '${context.eventName}' is not handled.`);
