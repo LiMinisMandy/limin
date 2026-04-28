@@ -22,6 +22,7 @@ jobs:
         env:
           PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          PROJECT_TITLE: ${{ vars.PROJECT_TITLE }}
           STATUS_FIELD_NAME: ${{ vars.STATUS_FIELD_NAME }}
           COMMENT_ON_TRANSITION: ${{ vars.COMMENT_ON_TRANSITION }}
         with:
@@ -30,15 +31,11 @@ jobs:
             const owner = process.env.PROJECT_OWNER || context.repo.owner;
             const repo = context.repo.repo;
             const projectNumber = Number(process.env.PROJECT_NUMBER || "0");
+            const projectTitle = (process.env.PROJECT_TITLE || "").trim();
             const statusFieldName = process.env.STATUS_FIELD_NAME || "Status";
             const commentOnTransition = (process.env.COMMENT_ON_TRANSITION || "false").toLowerCase() === "true";
             const transitions = { plan: "策划完成" };
             const commandRegex = /\b(plan)\s+#(\d+)\b/ig;
-
-            if (!projectNumber) {
-              core.setFailed("PROJECT_NUMBER is required (Repository Variable).");
-              return;
-            }
 
             const commits = context.payload.commits || [];
             if (!commits.length) {
@@ -67,67 +64,6 @@ jobs:
 
             core.info(`Found ${actions.length} transition command(s).`);
 
-            const projectQuery = `
-              query($owner: String!, $number: Int!) {
-                organization(login: $owner) {
-                  projectV2(number: $number) {
-                    id
-                    title
-                    number
-                    fields(first: 100) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
-                          id
-                          name
-                          options {
-                            id
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-                user(login: $owner) {
-                  projectV2(number: $number) {
-                    id
-                    title
-                    number
-                    fields(first: 100) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
-                          id
-                          name
-                          options {
-                            id
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            `;
-
-            const projectResp = await github.graphql(projectQuery, {
-              owner,
-              number: projectNumber,
-            });
-
-            const project = projectResp.organization?.projectV2 || projectResp.user?.projectV2;
-            if (!project) {
-              core.setFailed(`Project v2 not found: owner=${owner}, number=${projectNumber}`);
-              return;
-            }
-
-            const statusField = (project.fields.nodes || []).find((f) => f && f.name === statusFieldName);
-            if (!statusField) {
-              core.setFailed(`Status field '${statusFieldName}' not found in project #${projectNumber}.`);
-              return;
-            }
-
-            const optionByName = new Map((statusField.options || []).map((o) => [o.name, o.id]));
             const issueQuery = `
               query($owner: String!, $repo: String!, $issueNumber: Int!) {
                 repository(owner: $owner, name: $repo) {
@@ -144,17 +80,65 @@ jobs:
                           number
                           title
                         }
-                        fieldValues(first: 50) {
-                          nodes {
-                            ... on ProjectV2ItemFieldSingleSelectValue {
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            const projectByNumberQuery = `
+              query($owner: String!, $number: Int!) {
+                organization(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    number
+                    title
+                  }
+                }
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    number
+                    title
+                  }
+                }
+              }
+            `;
+
+            const projectDetailQuery = `
+              query($projectId: ID!, $itemId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    id
+                    number
+                    title
+                    fields(first: 100) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                nodeItem: node(id: $itemId) {
+                  ... on ProjectV2Item {
+                    id
+                    fieldValues(first: 50) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                          optionId
+                          field {
+                            ... on ProjectV2SingleSelectField {
+                              id
                               name
-                              optionId
-                              field {
-                                ... on ProjectV2SingleSelectField {
-                                  id
-                                  name
-                                }
-                              }
                             }
                           }
                         }
@@ -189,12 +173,6 @@ jobs:
                 continue;
               }
 
-              const targetOptionId = optionByName.get(targetStatus);
-              if (!targetOptionId) {
-                core.warning(`Status option '${targetStatus}' not found in project field '${statusFieldName}', skipped #${action.issueNumber}`);
-                continue;
-              }
-
               const issueResp = await github.graphql(issueQuery, {
                 owner,
                 repo,
@@ -207,13 +185,68 @@ jobs:
                 continue;
               }
 
-              const item = (issue.projectItems.nodes || []).find((n) => n?.project?.id === project.id);
-              if (!item) {
-                core.warning(`Issue #${issue.number} is not in project #${projectNumber}, skipped.`);
+              const projectItems = issue.projectItems.nodes || [];
+              if (!projectItems.length) {
+                core.warning(`Issue #${issue.number} is not in any project, skipped.`);
                 continue;
               }
 
-              const currentStatusValue = (item.fieldValues.nodes || []).find(
+              let item;
+              if (projectNumber) {
+                const projectResp = await github.graphql(projectByNumberQuery, {
+                  owner,
+                  number: projectNumber,
+                });
+                const selectedProject = projectResp.organization?.projectV2 || projectResp.user?.projectV2;
+                if (!selectedProject) {
+                  core.warning(`Project v2 not found: owner=${owner}, number=${projectNumber}, skipped #${issue.number}`);
+                  continue;
+                }
+                item = projectItems.find((n) => n?.project?.id === selectedProject.id);
+                if (!item) {
+                  core.warning(`Issue #${issue.number} is not in project #${projectNumber}, skipped.`);
+                  continue;
+                }
+              } else {
+                let candidates = projectItems;
+                if (projectTitle) {
+                  candidates = candidates.filter((n) => n?.project?.title === projectTitle);
+                }
+                if (candidates.length !== 1) {
+                  const titles = candidates.map((n) => `${n?.project?.title || "unknown"}(#${n?.project?.number || "?"})`).join(", ");
+                  core.warning(
+                    `Issue #${issue.number} matches ${candidates.length} project items (${titles || "none"}). Set PROJECT_NUMBER or PROJECT_TITLE to disambiguate.`
+                  );
+                  continue;
+                }
+                item = candidates[0];
+              }
+
+              const projectDetailResp = await github.graphql(projectDetailQuery, {
+                projectId: item.project.id,
+                itemId: item.id,
+              });
+              const project = projectDetailResp.node;
+              const itemDetail = projectDetailResp.nodeItem;
+              if (!project || !itemDetail) {
+                core.warning(`Failed to load project/item details for issue #${issue.number}, skipped.`);
+                continue;
+              }
+
+              const statusField = (project.fields.nodes || []).find((f) => f && f.name === statusFieldName);
+              if (!statusField) {
+                core.warning(`Status field '${statusFieldName}' not found in project '${project.title}', skipped #${issue.number}`);
+                continue;
+              }
+
+              const optionByName = new Map((statusField.options || []).map((o) => [o.name, o.id]));
+              const targetOptionId = optionByName.get(targetStatus);
+              if (!targetOptionId) {
+                core.warning(`Status option '${targetStatus}' not found in project '${project.title}', skipped #${issue.number}`);
+                continue;
+              }
+
+              const currentStatusValue = (itemDetail.fieldValues.nodes || []).find(
                 (v) => v?.field?.id === statusField.id
               );
               const currentStatusName = currentStatusValue?.name || "(empty)";
